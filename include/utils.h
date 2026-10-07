@@ -2,6 +2,8 @@
 #define momentarius_utils_h
 
 #include <stdint.h>
+#include <stddef.h>
+#include <sys/types.h>
 #include <mach/mach.h>
 #include "momentarius.h"
 
@@ -10,8 +12,21 @@ extern volatile bool stop_write;
 
 #define KADDR_VALID(va) (((va) & 0xffff000000000000) == 0xffff000000000000)
 #define GFX_PA_VALID(arg) (((arg) & 0x0000FFFF00000000) == 0x800000000)
+#define trunc_page_kernel(address) ((uint64_t)(address) & ~0x3fffULL)
 
 extern int IOSurface_map_withCacheMode(uint64_t pa, uint64_t size, void **uaddr, uint32_t cacheMode);
+uint64_t kread64(uint64_t address);
+uint32_t kread32(uint64_t address);
+uint8_t kread8(uint64_t address);
+uint64_t kread_ptr(uint64_t address);
+void kwrite64(uint64_t address, uint64_t value);
+void kwrite32(uint64_t address, uint32_t value);
+void kwrite8(uint64_t address, uint8_t value);
+void kreadbuf(uint64_t address, void *buffer, size_t size);
+void kwritebuf(uint64_t address, const void *buffer, size_t size);
+uint64_t proc_find(pid_t pid);
+uint64_t proc_self(void);
+uint64_t proc_task(uint64_t proc);
 extern uint64_t physread64(uint64_t pa);
 extern uint32_t physread32(uint64_t pa);
 extern uint64_t kvtophys(uint64_t va);

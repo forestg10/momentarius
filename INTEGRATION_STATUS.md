@@ -38,22 +38,50 @@ instead of checking the newly computed `l3_table_pte_pa`. These checks run
 before the graphics writer starts; they do not bound or recover a failure
 after writer start.
 
+The A13 source now also fails before writer start if the second graphics page
+mapping fails, the detected patch sites fall outside the kernel text or cross
+the mapped 16 KB page boundary, or creation of the PTE-waiter thread fails.
+These checks prevent known pre-writer faults. They do not address the endless
+writer/poller once it starts.
+
 The 20G75 IOSurface initializer `FUN_fffffff009dafa78` handles the
 `IOSurfaceAddressRanges` property by storing the ranges pointer at
 `IOSurface + 0x3f8` and the range count at `IOSurface + 0x400`. These are
 Ghidra-confirmed field offsets for this kernelcache. The IOSurface
-`memoryDescriptor` pointer (Dopamine's generic iOS 16 default is `+0x38`) and
-the mapper's internal `IOMemoryDescriptor` offsets remain unverified here.
+`memoryDescriptor` pointer is supported at `+0x38` by the backing-object
+allocation path described below. The descriptor's flags, memory reference,
+size, ranges, range count, task, and wire-count offsets are also confirmed in
+target disassembly; this establishes layout, not mapper safety.
 The `IOSurfaceRootUserClient +0x118` assumption is contradicted by the
 20G75 lookup trace below. The meanings of `IOSurfaceClient +0x40` and
-`IOSurfaceSendRight +0x18` still need confirmation.
+`IOSurfaceSendRight +0x18` as the surface reference still need confirmation;
+the latter is known to be an owned-object slot, but its referent is unknown.
 
 The initializer was rechecked as a methodology cross-check: it reads the
 `IOSurfaceAddressRanges` property and writes the resulting allocation/count at
-`+0x3f8`/`+0x400`. It does not access the mapper's `memoryDescriptor` field or
-the descriptor's internal fields, so it cannot verify those offsets. Dopamine
-clears `desc + 0x70`, `desc + 0x18`, and `desc + 0x90`; these offsets are from
-the `IOMemoryDescriptor` object, not from the `IOSurface` base.
+`+0x3f8`/`+0x400`. It does not by itself verify the mapper's descriptor fields;
+those were established through separate virtual-method analysis below.
+Dopamine clears descriptor-relative slots `+0x70`, `+0x18`, and `+0x90`.
+Ghidra identifies `+0x70` as the descriptor task pointer and `+0x18`/`+0x90`
+as owned-reference slots. This does not establish that clearing them is safe
+in the mapper's particular descriptor state.
+
+A further Ghidra pass on 20G75 followed the `IOSurfaceAddressRanges` string
+reference into `FUN_fffffff009db4ae0`, within the same large IOSurface
+initializer. It confirms this is property parsing in the ranges/plane setup
+path; it does not establish descriptor fields.
+
+The IOSurface allocation path provides separate evidence for the descriptor
+pointer slot. In `FUN_fffffff009db537c`, the default backing allocation calls
+`FUN_fffffff0083c031c` with size/options/alignment arguments; it allocates and
+initializes the registered `IOBufferMemoryDescriptor` class (instance size
+`0xe8`). Its result is handed to `FUN_fffffff009db8890`, which stores the
+retained object through the holder at `IOSurface + 0x38`. The IOSurface
+constructor `FUN_fffffff009daf5f4` also initializes the corresponding holder.
+This confirms the backing memory-descriptor pointer slot at `+0x38` for this
+20G75 allocation path. Lara records it as
+`LARA_MOMENTARIUS_20G75_IOSURFACE_MEMORY_DESCRIPTOR`. It does not establish
+that the separate send-right field references the same IOSurface object.
 
 A follow-up inspection of `FUN_fffffff009db70e4`, called after the address-range
 initializer, found property-container and creation-property handling but no
@@ -87,13 +115,39 @@ to null and its destructor releases/clears that field; this confirms an owned
 object reference there, but not which object it references.
 
 The 20G75 IOKit class-registration routine at `FUN_fffffff0083d42b8` registers
-`IOMemoryDescriptor` with instance size `0x60` and
-`IOGeneralMemoryDescriptor` with size `0xb0`. This is consistent with the
-Dopamine mapper receiving a general descriptor whose subclass contains fields
-past the base-class boundary (including its assumed `ranges` at `+0x60`), but
-class sizes do not confirm the meaning or validity of `ranges`, `size`, wired,
-flags, `memRef`, or the cleared slots. The IOSurface-to-descriptor pointer and
-those field offsets remain unverified against 20G75.
+`IOMemoryDescriptor` with instance size `0x60`, `IOGeneralMemoryDescriptor` with
+size `0xb0`, and `IOBufferMemoryDescriptor` with size `0xe8`. Class sizes are
+only a sanity check; field meanings below are established by virtual-method
+accesses in the target kernelcache.
+
+Follow-up constructor/destructor inspection shows the IOGeneral constructor
+initializes `+0x18` and `+0x90` to null and the destructor releases/clears them.
+These are owned-reference slots; their exact source names and whether forcibly
+clearing them is safe in the mapper's descriptor state are not established.
+
+### `IOGeneralMemoryDescriptor` mapper fields
+
+The 20G75 constructor `FUN_fffffff0083d3120` installs the object vtable at
+`PTR_FUN_fffffff007957568`. Its virtual method `FUN_fffffff0083d26d8` reads
+flags at `object +0x20`, ranges at `+0x60`, and range count at `+0x68`.
+Additional virtual methods establish size at `+0x50` (`FUN_fffffff0083cc328`),
+task at `+0x70` and a conditional memory-reference path at `+0x28`
+(`FUN_fffffff0083d1944`), and wire count at `+0x88` (`FUN_fffffff0083d2368`
+waits on this count during descriptor teardown). Lara records these offsets
+as `LARA_MOMENTARIUS_20G75_IOMD_*` constants in `offsets.h`. The `+0x28`
+field is identified as `_memRef` by matching its use to the memory-reference
+branch and member order in Apple's nearby `xnu-8796.141.3` header. The device
+kernel is `xnu-8796.142.1`; that source is semantic corroboration only, while
+the byte offsets are from target disassembly. Confirming offsets does not
+establish that Dopamine's direct field mutations are safe for Lara's mapper.
+
+The public Apple XNU tag `xnu-8796.141.3` has matching
+`IOGeneralMemoryDescriptor` and `IOBufferMemoryDescriptor` definitions and
+member order, and is useful for interpreting the Ghidra accesses. The device
+kernel identifies as `xnu-8796.142.1`, so that nearby source tag is semantic
+cross-reference only; the byte offsets above come from 20G75 disassembly.
+Whether the direct field mutations are safe in the mapper's required object
+state remains unresolved.
 
 ### `pmap` layout evidence
 
@@ -134,21 +188,38 @@ A search of the 20G75 instruction stream found a `TTBR1_EL1` write at
 from `x25 + 0x4000` and masked; this is an early translation setup path and
 does not load `pmap + 0x8`; it is unrelated to this pmap-field confirmation.
 
-## Still blocking runtime use
+## Experimental Lara test wiring and remaining blockers
 
-The A13 implementation is not safe to call from Lara yet. It has an unbounded
-PTE polling/join path, does not preserve enough original graphics state for a
-complete rollback, and has no independently verified read/write probe. The
-pipe allocator's `fg_data + 0x10` buffer field is confirmed for 20G75, and
-syscall/pointer-chain checks are present, but the allocator has not been
-validated at runtime. Lara now has read-only exact-profile PA-to-KVA,
-VA-to-PA, and level-aware walk source. None has been runtime-validated or
-connected to Momentarius, and the IOSurface mapper remains absent.
+Lara now has an experimental Tools entry, `Run Momentarius A13 test`, gated to
+the exact iPhone12,1 / 20G75 profile and DarkSword readiness. The Momentarius
+sources are included through the Xcode filesystem-synchronized group, with the
+adapter and IOSurface framework linked. The action runs the A13 init routine;
+it is not a production toggle and must not set `momentariusready`.
 
-Keep the Settings entry absent and `momentariusready` false until those gaps
-have a bounded failure path, complete cleanup, a verified allocator layout,
-and a successful non-destructive post-init probe. The offsets above are static
-kernelcache analysis, not device runtime validation.
+The adapter provides ABI wrappers for the Lara read/write helpers and the
+translation functions, plus an IOSurface mapper using the 20G75 field table.
+That mapper is source-level only. The IOSurface send-right-to-object lookup
+(`send_right + 0x18`) and descriptor mutation/lifetime assumptions have not
+been independently runtime-verified. Normal-return cleanup checks its writes
+back before releasing tracked ports/surfaces; if restoration cannot be
+verified, it retains those references and reports cleanup failure. This is
+not proof of recovery from a crash or a stalled writer.
+
+The A13 init still has an unbounded graphics-cacheline writer and PTE poll.
+If it stalls, force-restart the device. No timeout or reliable mid-init
+rollback has been implemented. The current Lara kernel-write wrappers are not
+an independent verification of Momentarius' physical PPL-write primitive, so
+the Tools action reports only that init returned; it does not report a probe
+pass and leaves `momentariusready` false. Reboot before another attempt.
+
+The pipe allocator has source-level checks for syscall results and pointer
+chains, and the read-only translation diagnostic passed one kernel-image
+round-trip on the user's iPhone12,1 / 20G75. The allocator has not been
+runtime-validated, and the translation PA has no independent oracle. The
+offsets in this report remain static analysis, not general device validation.
+Do not enable any user-facing Momentarius capability until independent
+physical-write verification, allocator validation, and a recoverable failure
+path are established.
 
 ### Read-only device diagnostic
 
@@ -158,10 +229,10 @@ pmap` chain, walks the kernel image VA with the new software walker, translates
 the resulting PA back to a KVA, and reports the root, VA, PA, PTE KVA, and
 round-trip result. This path only calls kernel reads; it never calls Momentarius
 init or writes kernel memory. A round-trip pass is a smoke check, not independent
-validation of the PA, and the helper has not been built or run on-device yet.
-The first user test should be this diagnostic on iPhone12,1 / build 20G75 only;
-send the full report and Lara log. Do not use a successful smoke check as a
-Momentarius readiness signal.
+validation of the PA. The first run failed at stage 5 because the raw integer
+reader retained PAC bits in `task.map`; the helper was corrected to use
+`ds_kreadptr()`, then passed on the iPhone12,1 / 20G75 device. Do not use that
+smoke check as a Momentarius readiness signal.
 
 The first device screenshot confirms the Tools entry is reachable on
 iPhone12,1 / 20G75 with DarkSword reporting kernel R/W ready, but the diagnostic
@@ -183,13 +254,12 @@ map work together for this kernel image address on this device. It is not an
 independent physical-address oracle, does not validate other virtual addresses
 or profiles, and is not a Momentarius readiness probe.
 
-The vendored common init now rejects every profile except iPhone12,1 / 20G75
-before doing any mapping, no longer dispatches to the A12 implementation, and
-fixes two preflight checks that previously rechecked the proc/map pointer
-instead of the task/pmap pointer. Its two IOSurface map helpers now reject a
-failed mapping result or null address. These are source-level guard fixes; they
-do not supply the missing mapper, make the sources part of Lara's target, or
-make the exploit callable.
+The vendored common init rejects every profile except iPhone12,1 / 20G75 before
+doing any mapping, no longer dispatches to the A12 implementation, and fixes
+two preflight checks that previously rechecked the proc/map pointer instead of
+the task/pmap pointer. Its IOSurface mapping helpers reject a failed mapping
+result or null address. Lara now has experimental source wiring for this path,
+but no Xcode build or new device run has verified it.
 
 The pipe allocator now caps the number of retained allocator pipes and records
 their file descriptors after a successful buffer lookup; init failure cleanup
@@ -263,43 +333,44 @@ Collect several successful 20G75 runs before selecting a timeout and margin.
 
 ## Lara build/adapter gap
 
-The Xcode project currently has a filesystem-synchronized source root for
-`lara/`; `momentarius/` is outside that target and its C files are not compiled
-into Lara. Momentarius expects `IOSurface_map_withCacheMode`, `kvtophys`,
-`phystokv`, and `vtophys_lvl`. Lara now has exact-profile, read-only source
-implementations for the three translation helpers, with one successful
-on-device kernel-image round-trip smoke check. They are not connected to
-Momentarius. The IOSurface mapper remains absent.
-Therefore the timer added to the vendored common init is not reachable from
-Lara and cannot currently produce a device measurement. Safe wiring still
-requires runtime validation of the translation helpers, a verified mapper,
-and target membership plus an adapter for the Momentarius sources.
+The Xcode project has a filesystem-synchronized source root for `lara/` and now
+includes `momentarius/` as a synchronized source group with the vendor include
+path. `lara/kexploit/momentarius_adapter.m` supplies the expected mapper and
+translation ABI wrappers. This is experimental wiring only: no Xcode build or
+device run has verified source membership, link success, mapper behavior, or
+the full init path. The init timer is now reachable through the Tools test
+button if the app builds, but produces a duration only after successful
+return; a stalled init remains unbounded.
 
 The Lara translation helper declarations are intentionally not ABI-compatible
 drop-in replacements for `momentarius/include/utils.h`: Lara returns `bool`
 and writes outputs through pointers, while Momentarius expects direct integer
 returns; Lara's `kvtophys` also requires an explicit software-walk root, while
-Momentarius calls it with only a VA. A wrapper must handle those differences
-and propagate every translation failure before any Momentarius write. The
-current helpers remain isolated and must not be linked as if their signatures
-already matched.
-The root mismatch was corrected in the vendored source: common init now reads
+Momentarius calls it with only a VA. The source adapter wraps those interfaces
+and fails closed on translation failure. It has not yet been validated by an
+Xcode build or on-device test.
+The root mismatch was corrected in the vendored source: common init reads
 the PAC-stripped software-walk root from `pmap + 0x0` into `kern_tte`, and both
 A13 `vtophys_lvl` calls pass that KVA root. `kern_ttep` remains the physical
-TTBR value at `pmap + 0x8`. The ABI adapter is still absent: Lara's walker
-returns PTE KVA through an output parameter, while Momentarius expects the PTE
-PA through its `leaf_tte_ttep` output and later converts that PA with
-`phystokv`; the wrapper must translate and check both values.
+TTBR value at `pmap + 0x8`. The adapter converts Lara's PTE KVA output to the
+PTE PA Momentarius expects, then lets the existing `phystokv` call map it back.
+The conversion is source-level only and needs build/runtime validation.
 
-The local `reference (dopamine)` copy provides the relevant
-`libjailbreak/src/primitives_IOSurface.m` and `translation.c`, but its
-`BaseBin/XPF` submodule directory is empty. That mapper depends on more than
-Lara's existing process offsets: it reads and mutates `IOMemoryDescriptor`
-fields at fixed offsets (`ranges +0x60`, `size +0x50`, and other state fields),
-and assumes exact IOSurface and IOMachPort layouts. Dopamine's generic
-`memoryDescriptor = 0x38` default and the IOSurface mapper's fixed field
-offsets are reference implementation assumptions, not verification against
-Lara's 20G75 kernelcache.
+The local `reference (dopamine)` copy provides
+`BaseBin/libjailbreak/src/primitives_IOSurface.m` and `translation.c`; its
+`BaseBin/XPF` submodule directory is empty. Lara already implements
+`task_get_ipc_port_kobject()` in `lara/kexploit/utils.m`, so that lookup helper
+does not need a new port. The remaining mapper dependency is the physical
+surface setup and verified object layout: Dopamine reads and mutates
+`IOMemoryDescriptor` fields at fixed offsets and assumes exact
+IOSurface/IOMachPort layouts.
+Dopamine's `info.c` initializes `IOSurface.memoryDescriptor` to `+0x38` for
+iOS 16, then changes it to `+0x40` for iOS 17 and `+0x30` for iOS 17.4+.
+The 20G75 allocation path independently confirms the `+0x38` pointer slot;
+Ghidra also confirms descriptor flags at `+0x20`, memory reference at `+0x28`,
+size at `+0x50`, ranges/count at `+0x60`/`+0x68`, task at `+0x70`, and wire
+count at `+0x88`. These findings confirm structure offsets only; they do not
+verify the mapper's object lookup chain or mutations.
 
 The mapper's translation call site is narrower than a general physical-memory
 API: when `krwMinSafeReadSize > 0x10`, it converts the userspace `fakeRanges`
@@ -380,9 +451,11 @@ for that conversion. Its 20G75 global RVAs from this kernelcache are:
 | Physical range size | `0x8ff9a0` | Bounds the fallback range. |
 
 The helper fails closed on other build/device profiles and non-kernel output
-addresses. It has not been runtime-tested and is not yet connected to
-Momentarius. The companion `kvtophys` and level-aware walker are also source
-only and need independent on-device checks.
+addresses. The user's read-only smoke run exercised its reverse mapping for
+one kernel-image PA. The adapter now connects the helper to Momentarius source,
+but it has not been build- or runtime-validated. The companion `kvtophys` and
+level-aware walker have one on-device smoke case, not independent validation
+across addresses or an independent PA oracle.
 
 Lara does have `kernelStruct.IOSurface.ranges` support in newer XPF source, but
 the bundled `lara/lib/libxpf.dylib` contains no IOSurface resolver identifiers
@@ -392,8 +465,11 @@ runtime check around the existing bundled resolver cannot currently produce
 verified IOSurface range offsets. The local Dopamine copy contains no built
 `libxpf` replacement or populated XPF sources to link instead.
 
-The safe integration boundary remains unchanged: do not compile/call the
-Momentarius init path or surface its toggle until Lara has an IOSurface mapper
-whose 20G75 structure fields are resolved and validated, working translation
-helpers, and a checked allocator path. The current `momentariusready` flag is
-deliberately never set; it is not a readiness probe.
+The Tools test entry intentionally exposes only an experimental init attempt
+for iPhone12,1 / 20G75. It does not set `momentariusready`: init returning is
+not a PPL-write readiness probe. Remaining blockers are the unbounded poll,
+no validated crash/failure recovery, no independent PPL physical-write probe,
+and no device validation of the IOSurface mapper or pipe allocator. Do not
+describe this as production-ready or as a successful PPL bypass until those
+checks are completed. Xcode build validation has not been run in this Windows
+workspace.

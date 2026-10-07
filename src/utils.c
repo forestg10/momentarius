@@ -3,6 +3,9 @@
 #include <dlfcn.h>
 #include "utils.h"
 
+extern uint32_t off_proc_p_fd;
+extern uint32_t off_filedesc_fd_ofiles;
+
 __attribute__((naked)) void momentarius_tlb_flush(void) {
     asm ("dsb sy");
     asm ("mov x0, xzr");
@@ -98,7 +101,8 @@ uint64_t kalloc_page(void) {
     sync();
     
     if (momentarius.self_proc_addr == 0 || !KADDR_VALID(momentarius.self_proc_addr)) goto fail_pipe;
-    uint64_t offset = koffsetof(proc, fd) + koffsetof(filedesc, ofiles_start);
+    // These offsets are exact-profile gated by Lara for iPhone12,1 / 20G75.
+    uint64_t offset = off_proc_p_fd + off_filedesc_fd_ofiles;
     uint64_t fd_ofiles = kread_ptr(momentarius.self_proc_addr + offset);
     if (fd_ofiles == 0 || !KADDR_VALID(fd_ofiles)) goto fail_pipe;
 
