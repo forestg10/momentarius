@@ -192,8 +192,9 @@ does not load `pmap + 0x8`; it is unrelated to this pmap-field confirmation.
 
 The Momentarius sources are included through the Xcode filesystem-synchronized
 group, with the adapter and IOSurface framework linked. The exact-profile test
-action is available again for one attempt per app process after the allocator
-overflow fix. This is a test build, not a readiness toggle.
+action was briefly restored after the allocator overflow fix, but the user
+reported a second panic. It has been disabled again while the new panic report
+is collected. This is not a readiness toggle.
 
 The adapter provides ABI wrappers for the Lara read/write helpers and the
 translation functions, plus an IOSurface mapper using the 20G75 field table.
@@ -234,7 +235,9 @@ symbolize the user-space call site, so attribution is high-confidence rather
 than proven by a stack symbol. The test path was disabled, then re-enabled for
 one exact-profile test attempt after removing the write. The change has not
 been tested on-device; the unbounded init poll and other allocator assumptions
-remain. Do not use any build older than the one containing this source fix.
+remain. The second panic report is not yet present in the workspace, so its
+cause is unknown. Do not run Momentarius again until that report is reviewed
+and the fault is fixed.
 
 ### Read-only device diagnostic
 
@@ -480,10 +483,10 @@ runtime check around the existing bundled resolver cannot currently produce
 verified IOSurface range offsets. The local Dopamine copy contains no built
 `libxpf` replacement or populated XPF sources to link instead.
 
-The Tools page exposes the read-only translation diagnostic and an exact-profile
-one-attempt test action. The latter does not set `momentariusready`. Remaining
-blockers include the unbounded poll, no validated crash/failure recovery, no
-independent PPL physical-write probe, and no device validation of the IOSurface
-mapper or pipe allocator. Do not describe this as production-ready or as a
-successful PPL bypass until those checks are completed. Xcode build validation
-has not yet been run for this latest test-action change.
+The Tools page exposes only the read-only translation diagnostic;
+`lara_momentarius_run_test()` returns `NOT_READY`. Remaining blockers include
+the unbounded poll, no validated crash/failure recovery, no independent PPL
+physical-write probe, and no device validation of the IOSurface mapper or pipe
+allocator. Do not describe this as production-ready or as a successful PPL
+bypass until those checks are completed. Xcode build validation has not yet
+been run for this latest disablement.
