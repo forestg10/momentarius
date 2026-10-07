@@ -118,8 +118,6 @@ uint64_t kalloc_page(void) {
     uint64_t pipe_buf = kread_ptr(fg_data + 0x10);
     if (pipe_buf == 0 || !KADDR_VALID(pipe_buf)) goto fail_pipe;
 
-    uint8_t empty[32] = {0};
-    kwritebuf(fg_data, empty, 32);
     uint32_t slot = momentarius.allocator_fd_count++;
     momentarius.allocator_fds[slot][0] = fds[0];
     momentarius.allocator_fds[slot][1] = fds[1];

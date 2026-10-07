@@ -190,11 +190,11 @@ does not load `pmap + 0x8`; it is unrelated to this pmap-field confirmation.
 
 ## Experimental Lara test wiring and remaining blockers
 
-Lara now has an experimental Tools entry, `Run Momentarius A13 test`, gated to
-the exact iPhone12,1 / 20G75 profile and DarkSword readiness. The Momentarius
-sources are included through the Xcode filesystem-synchronized group, with the
-adapter and IOSurface framework linked. The action runs the A13 init routine;
-it is not a production toggle and must not set `momentariusready`.
+The Momentarius sources are included through the Xcode filesystem-synchronized
+group, with the adapter and IOSurface framework linked. The experimental test
+action has been removed from Tools and `lara_momentarius_run_test()` now returns
+`NOT_READY` unconditionally after a device panic described below. The sources
+remain in the target, but Lara cannot start Momentarius through this adapter.
 
 The adapter provides ABI wrappers for the Lara read/write helpers and the
 translation functions, plus an IOSurface mapper using the 20G75 field table.
@@ -220,6 +220,21 @@ offsets in this report remain static analysis, not general device validation.
 Do not enable any user-facing Momentarius capability until independent
 physical-write verification, allocator validation, and a recoverable failure
 path are established.
+
+### 2026-10-07 device panic
+
+The user's `panic-full-2026-10-07-193630.0002.ips` report records a zone-bound
+check failure in Lara: a 32-byte buffer write overflowed a 16-byte object in
+`kalloc.type6.16`. This strongly matches the allocator's former
+`kwritebuf(fg_data, empty, 32)` call: it wrote 32 bytes at the start of the
+pipe's `fg_data` object, whose reported allocation size is 16 bytes. That write
+has been removed from `momentarius/src/utils.c`. This is a source-level fix;
+there has been no post-fix device validation, and the panic report does not
+symbolize the user-space call site, so attribution is high-confidence rather
+than proven by a stack symbol. The Momentarius test UI and adapter entry point
+are disabled pending a broader allocator and init-path review. Do not run the
+previously installed build again; it still contains the old code until rebuilt
+and reinstalled.
 
 ### Read-only device diagnostic
 
@@ -465,11 +480,10 @@ runtime check around the existing bundled resolver cannot currently produce
 verified IOSurface range offsets. The local Dopamine copy contains no built
 `libxpf` replacement or populated XPF sources to link instead.
 
-The Tools test entry intentionally exposes only an experimental init attempt
-for iPhone12,1 / 20G75. It does not set `momentariusready`: init returning is
-not a PPL-write readiness probe. Remaining blockers are the unbounded poll,
-no validated crash/failure recovery, no independent PPL physical-write probe,
-and no device validation of the IOSurface mapper or pipe allocator. Do not
-describe this as production-ready or as a successful PPL bypass until those
-checks are completed. Xcode build validation has not been run in this Windows
-workspace.
+The Tools page exposes only the read-only translation diagnostic;
+`lara_momentarius_run_test()` fails closed. Remaining blockers include the
+unbounded poll, no validated crash/failure recovery, no independent PPL
+physical-write probe, and no device validation of the IOSurface mapper or pipe
+allocator. Do not describe this as production-ready or as a successful PPL
+bypass until those checks are completed. Xcode build validation has not been
+run in this Windows workspace.
