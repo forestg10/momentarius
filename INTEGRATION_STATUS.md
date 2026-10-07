@@ -191,10 +191,9 @@ does not load `pmap + 0x8`; it is unrelated to this pmap-field confirmation.
 ## Experimental Lara test wiring and remaining blockers
 
 The Momentarius sources are included through the Xcode filesystem-synchronized
-group, with the adapter and IOSurface framework linked. The experimental test
-action has been removed from Tools and `lara_momentarius_run_test()` now returns
-`NOT_READY` unconditionally after a device panic described below. The sources
-remain in the target, but Lara cannot start Momentarius through this adapter.
+group, with the adapter and IOSurface framework linked. The exact-profile test
+action is available again for one attempt per app process after the allocator
+overflow fix. This is a test build, not a readiness toggle.
 
 The adapter provides ABI wrappers for the Lara read/write helpers and the
 translation functions, plus an IOSurface mapper using the 20G75 field table.
@@ -210,7 +209,8 @@ If it stalls, force-restart the device. No timeout or reliable mid-init
 rollback has been implemented. The current Lara kernel-write wrappers are not
 an independent verification of Momentarius' physical PPL-write primitive, so
 the Tools action reports only that init returned; it does not report a probe
-pass and leaves `momentariusready` false. Reboot before another attempt.
+pass and leaves `momentariusready` false. It refuses another attempt in the
+same app process after a return or failure.
 
 The pipe allocator has source-level checks for syscall results and pointer
 chains, and the read-only translation diagnostic passed one kernel-image
@@ -231,10 +231,10 @@ pipe's `fg_data` object, whose reported allocation size is 16 bytes. That write
 has been removed from `momentarius/src/utils.c`. This is a source-level fix;
 there has been no post-fix device validation, and the panic report does not
 symbolize the user-space call site, so attribution is high-confidence rather
-than proven by a stack symbol. The Momentarius test UI and adapter entry point
-are disabled pending a broader allocator and init-path review. Do not run the
-previously installed build again; it still contains the old code until rebuilt
-and reinstalled.
+than proven by a stack symbol. The test path was disabled, then re-enabled for
+one exact-profile test attempt after removing the write. The change has not
+been tested on-device; the unbounded init poll and other allocator assumptions
+remain. Do not use any build older than the one containing this source fix.
 
 ### Read-only device diagnostic
 
@@ -480,10 +480,10 @@ runtime check around the existing bundled resolver cannot currently produce
 verified IOSurface range offsets. The local Dopamine copy contains no built
 `libxpf` replacement or populated XPF sources to link instead.
 
-The Tools page exposes only the read-only translation diagnostic;
-`lara_momentarius_run_test()` fails closed. Remaining blockers include the
-unbounded poll, no validated crash/failure recovery, no independent PPL
-physical-write probe, and no device validation of the IOSurface mapper or pipe
-allocator. Do not describe this as production-ready or as a successful PPL
-bypass until those checks are completed. Xcode build validation has not been
-run in this Windows workspace.
+The Tools page exposes the read-only translation diagnostic and an exact-profile
+one-attempt test action. The latter does not set `momentariusready`. Remaining
+blockers include the unbounded poll, no validated crash/failure recovery, no
+independent PPL physical-write probe, and no device validation of the IOSurface
+mapper or pipe allocator. Do not describe this as production-ready or as a
+successful PPL bypass until those checks are completed. Xcode build validation
+has not yet been run for this latest test-action change.
