@@ -1,5 +1,5 @@
-#include "utils.h"
-#include "momentarius.h"
+#include "../include/utils.h"
+#include "../include/momentarius.h"
 #include <string.h>
 #include <time.h>
 

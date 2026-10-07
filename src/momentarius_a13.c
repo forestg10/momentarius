@@ -1,5 +1,5 @@
-#include "momentarius.h"
-#include "utils.h"
+#include "../include/momentarius.h"
+#include "../include/utils.h"
 
 __attribute__((naked)) static void gfx_write_cachelines_v1(uint64_t shc_in, uint64_t shc_out, uint64_t ttbr1_in, uint64_t ttbr1_out, uint64_t hook_in, uint64_t hook_out) {
     asm("adrp x10, _stop_write@PAGE");

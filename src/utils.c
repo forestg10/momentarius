@@ -1,7 +1,7 @@
 #include <sys/sysctl.h>
 #include <IOKit/IOKitLib.h>
 #include <dlfcn.h>
-#include "utils.h"
+#include "../include/utils.h"
 
 extern uint32_t off_proc_p_fd;
 extern uint32_t off_filedesc_fd_ofiles;

@@ -1,5 +1,5 @@
-#include "momentarius.h"
-#include "utils.h"
+#include "../include/momentarius.h"
+#include "../include/utils.h"
 
 static void *wait_for_pte(void *data) {
     uint32_t counter = 0;
