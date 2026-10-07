@@ -269,24 +269,26 @@ int momentarius_init_A13(void) {
     
     if (l1_table_phys == 0 || l2_table_phys == 0) return -1;
     momentarius.new_ttbr1 = l1_table_phys;
-    vtophys_lvl(momentarius.kern_ttep, momentarius.self_ref_pt_kva, &level, &l3_table_pte);
-    if (l3_table_pte == 0) return -1;
+    if (vtophys_lvl(momentarius.kern_tte, momentarius.self_ref_pt_kva, &level, &l3_table_pte) == 0 ||
+        level != 3 || l3_table_pte == 0) return -1;
     
     uint64_t l3_table_pte_kva = phystokv(l3_table_pte);
     if (!KADDR_VALID(l3_table_pte_kva)) return -1;
     
     uint64_t l3_table_pte_pa = kvtophys(l3_table_pte_kva & ~0x3FFF);
-    if (l3_table_pte == 0) return -1;
+    if (l3_table_pte_pa == 0) return -1;
     
     uint64_t l3_table_mapping_pte = kread64(l3_table_pte_kva);
     if (l3_table_mapping_pte == 0) return -1;
     
     level = 3;
     uint64_t mapping_pte = 0;
-    vtophys_lvl(momentarius.kern_ttep, momentarius.target_rw_mapping, &level, &mapping_pte);
-    if (mapping_pte == 0) return -1;
+    if (vtophys_lvl(momentarius.kern_tte, momentarius.target_rw_mapping, &level, &mapping_pte) == 0 ||
+        level != 3 || mapping_pte == 0) return -1;
     
-    uint64_t target_l3_table_pa = kvtophys(phystokv(mapping_pte) & ~0x3FFF);
+    uint64_t mapping_pte_kva = phystokv(mapping_pte);
+    if (!KADDR_VALID(mapping_pte_kva)) return -1;
+    uint64_t target_l3_table_pa = kvtophys(mapping_pte_kva & ~0x3FFF);
     if (target_l3_table_pa == 0) return -1;
     
     uint8_t data[0x40] = {0};

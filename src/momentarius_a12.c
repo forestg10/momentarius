@@ -144,7 +144,7 @@ int momentarius_init_A12(void) {
     // find L3 pte for self_ref_pt_kva
     uint64_t l3_table_pte = 0;
     uint64_t level = 3;
-    vtophys_lvl(momentarius.kern_ttep, momentarius.self_ref_pt_kva, &level, &l3_table_pte);
+    vtophys_lvl(momentarius.kern_tte, momentarius.self_ref_pt_kva, &level, &l3_table_pte);
     if (l3_table_pte == 0) return -1;
     debug_log("l3_table_pte: 0x%llx\n", l3_table_pte);
     
@@ -166,7 +166,7 @@ int momentarius_init_A12(void) {
     // L3 pte for target_rw_mapping
     level = 3;
     uint64_t mapping_pte = 0;
-    vtophys_lvl(momentarius.kern_ttep, momentarius.target_rw_mapping, &level, &mapping_pte);
+    vtophys_lvl(momentarius.kern_tte, momentarius.target_rw_mapping, &level, &mapping_pte);
     if (mapping_pte == 0) return -1;
     debug_log("mapping_pte: 0x%llx\n", mapping_pte);
     

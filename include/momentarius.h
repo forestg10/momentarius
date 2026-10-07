@@ -35,6 +35,7 @@ int momentarius_init_A13(void);
 #define IOMFB_START_SWAP        4
 #define IOMFB_CANCEL_SWAP       81
 #define IOMFB_COLOR_INVERT      19
+#define MOMENTARIUS_MAX_ALLOCATOR_PIPES 8
 
 typedef struct {
     struct {
@@ -73,6 +74,8 @@ typedef struct {
     uint64_t target_pte;
     uint64_t orig_pte;
     mach_port_t iomfb_client;
+    int allocator_fds[MOMENTARIUS_MAX_ALLOCATOR_PIPES][2];
+    uint32_t allocator_fd_count;
 } momentarius_t;
 
 #endif /* momentarius_h */

